@@ -5,74 +5,74 @@ import "core:strconv"
 import "core:strings"
 import "core:sys/posix"
 
-// core:fmt alone would double the binary size.
-cat :: proc(parts: ..string) -> string {
+// String building and output. core:fmt alone would double the binary size.
+
+concat :: proc(parts: ..string) -> string {
 	return strings.concatenate(parts)
 }
 
-write_cat :: proc(b: ^strings.Builder, parts: ..string) {
-	s := cat(..parts)
-	defer delete(s)
-	strings.write_string(b, s)
-}
-
-itoa :: proc(n: int) -> string {
-	buf := make([]u8, 24)
-	defer delete(buf)
-
-	return strings.clone(strconv.write_int(buf, i64(n), 10))
-}
-
-quote :: proc(s: string) -> string {
-	return cat(`"`, s, `"`)
-}
-
-pad :: proc(s: string, width: int) -> string {
-	if len(s) >= width {
-		return cat(s, " ")
+write_strings :: proc(b: ^strings.Builder, parts: ..string) {
+	for part in parts {
+		strings.write_string(b, part)
 	}
-	return cat(s, strings.repeat(" ", width - len(s) + 1))
 }
 
-say :: proc(parts: ..string) {
-	os.write_string(os.stdout, cat(cat(..parts), "\n"))
+int_to_string :: proc(n: int) -> string {
+	buf: [24]u8
+	return strings.clone(strconv.write_int(buf[:], i64(n), 10))
+}
+
+quoted :: proc(s: string) -> string {
+	return concat(`"`, s, `"`)
+}
+
+// s padded with spaces to width, always followed by at least one space.
+pad_right :: proc(s: string, width: int) -> string {
+	return concat(s, strings.repeat(" ", max(width - len(s), 0) + 1))
+}
+
+print_line :: proc(parts: ..string) {
+	os.write_string(os.stdout, concat(concat(..parts), "\n"))
 }
 
 fail :: proc(parts: ..string) -> ! {
-	os.write_string(os.stderr, cat("gws: ", cat(..parts), "\n"))
+	os.write_string(os.stderr, concat("gws: ", concat(..parts), "\n"))
 	os.exit(1)
 }
 
-Run_Result :: struct {
+// Processes and environment.
+
+Process_Result :: struct {
 	started: bool,
-	ok:      bool,
-	out:     string,
-	err:     string,
+	ok:      bool, // exited with status 0
+	stdout:  string,
+	stderr:  string,
 }
 
-run :: proc(command: []string, dir := "") -> Run_Result {
-	state, out, err, e := os.process_exec(
+run_process :: proc(command: []string, dir := "") -> Process_Result {
+	state, stdout, stderr, err := os.process_exec(
 		{command = command, working_dir = dir},
 		context.allocator,
 	)
-	if e != nil {
+	if err != nil {
 		return {}
 	}
 	return {
 		started = true,
 		ok = state.exited && state.exit_code == 0,
-		out = string(out),
-		err = string(err),
+		stdout = string(stdout),
+		stderr = string(stderr),
 	}
 }
 
-exec_cmd :: proc(argv: []string) -> ! {
-	cargs := make([]cstring, len(argv) + 1)
-	for a, i in argv {
-		cargs[i] = strings.clone_to_cstring(a)
+// Replaces this process with command; returns only by failing.
+replace_process :: proc(command: []string) -> ! {
+	argv := make([]cstring, len(command) + 1)
+	for arg, i in command {
+		argv[i] = strings.clone_to_cstring(arg)
 	}
-	posix.execvp(cargs[0], raw_data(cargs))
-	fail("cannot run ", argv[0], ": ", string(posix.strerror()))
+	posix.execvp(argv[0], raw_data(argv))
+	fail("cannot run ", command[0], ": ", string(posix.strerror()))
 }
 
 get_env :: proc(key: string) -> string {
@@ -80,33 +80,74 @@ get_env :: proc(key: string) -> string {
 }
 
 shell_path :: proc() -> string {
-	sh := get_env("SHELL")
-	defer delete(sh)
-
-	return sh if sh != "" else "/bin/sh"
+	shell := get_env("SHELL")
+	return shell if shell != "" else "/bin/sh"
 }
+
+// Paths and files.
 
 expand_home :: proc(path: string) -> string {
 	if path == "~" || strings.has_prefix(path, "~/") {
-		home := get_env("HOME")
-		defer delete(home)
-		return cat(home, path[1:])
-	}
-	return cat(path)
-}
-
-collapse_home :: proc(path: string) -> string {
-	home := get_env("HOME")
-	if home != "" && (path == home || strings.has_prefix(path, cat(home, "/"))) {
-		return cat("~", path[len(home):])
+		return concat(get_env("HOME"), path[1:])
 	}
 	return path
 }
 
+collapse_home :: proc(path: string) -> string {
+	home := get_env("HOME")
+	if home != "" && (path == home || strings.has_prefix(path, concat(home, "/"))) {
+		return concat("~", path[len(home):])
+	}
+	return path
+}
+
+// An existing directory as an absolute path, with `~` expanded; exits otherwise.
+resolve_dir :: proc(path: string) -> string {
+	dir, err := os.get_absolute_path(expand_home(path), context.allocator)
+	if err != nil || !os.is_dir(dir) {
+		fail("not a directory: ", path)
+	}
+	return dir
+}
+
+// Exits on error.
+read_file :: proc(path: string) -> string {
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		fail("cannot read ", path, ": ", os.error_string(err))
+	}
+	return string(data)
+}
+
+// Replaces the file in one step (temporary file, then rename), so a failed write never
+// leaves it half written. A symlink stays a symlink: its target is replaced, keeping its
+// permissions. Exits on error.
+write_file :: proc(path, text: string) {
+	target := path
+	if resolved, err := os.get_absolute_path(path, context.allocator); err == nil {
+		target = resolved
+	}
+	permissions := os.Permissions_Read_All + {.Write_User}
+	if info, err := os.stat(target, context.allocator); err == nil {
+		permissions = info.mode
+	}
+	// Unique per process: two gws commands may edit the same project at once.
+	temp := concat(target, ".", int_to_string(os.get_pid()), ".tmp")
+	err := os.write_entire_file(temp, text, permissions)
+	if err == nil {
+		err = os.rename(temp, target)
+	}
+	if err != nil {
+		_ = os.remove(temp)
+		fail("cannot write ", path, ": ", os.error_string(err))
+	}
+}
+
+// Quoting.
+
 shell_quote :: proc(s: string) -> string {
 	b := strings.builder_make()
 	strings.write_byte(&b, '\'')
-
 	for c in s {
 		if c == '\'' {
 			strings.write_string(&b, `'\''`)
@@ -114,7 +155,6 @@ shell_quote :: proc(s: string) -> string {
 			strings.write_rune(&b, c)
 		}
 	}
-
 	strings.write_byte(&b, '\'')
 	return strings.to_string(b)
 }
@@ -122,7 +162,6 @@ shell_quote :: proc(s: string) -> string {
 applescript_string :: proc(s: string) -> string {
 	b := strings.builder_make()
 	strings.write_byte(&b, '"')
-
 	for c in s {
 		switch c {
 		case '\\':
@@ -133,43 +172,6 @@ applescript_string :: proc(s: string) -> string {
 			strings.write_rune(&b, c)
 		}
 	}
-
 	strings.write_byte(&b, '"')
 	return strings.to_string(b)
-}
-
-name_char :: proc(c: u8) -> bool {
-	return(
-		(c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') ||
-		c == '_' ||
-		c == '-' \
-	)
-}
-
-valid_name :: proc(s: string) -> bool {
-	for i in 0 ..< len(s) {
-		if !name_char(s[i]) {
-			return false
-		}
-	}
-	return len(s) > 0
-}
-
-sanitize_name :: proc(s: string) -> string {
-	b := strings.builder_make()
-	for i in 0 ..< len(s) {
-		c := s[i] if name_char(s[i]) else '_'
-		if c == '_' && strings.has_suffix(strings.to_string(b), "_") {
-			continue
-		}
-		strings.write_byte(&b, c)
-	}
-	return strings.to_string(b)
-}
-
-write_pane_name :: proc(b: ^strings.Builder, i: int) {
-	strings.write_string(b, "pane")
-	strings.write_int(b, i)
 }

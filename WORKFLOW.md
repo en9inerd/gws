@@ -43,11 +43,12 @@ From any pane of the project:
 
 ```sh
 gws split right
-gws tab
+gws split down logs
+gws tab db
 ```
 
-Ghostty splits the pane or opens a tab, and the new pane (`myapp.2`) is saved to the
-project file. There is no save step: next time `gws open` splits the same pane again and
+Ghostty splits the pane or opens a tab, and the new pane is saved to the project file:
+numbered (`myapp.2`) unless you give it a name (`myapp.logs`, `myapp.db`). There is no save step: next time `gws open` splits the same pane again and
 puts a new tab back next to the one it was opened from. Ghostty's own splits and tabs
 (`cmd+d`, `cmd+t`) are plain shells: they are not saved and die with the window.
 
@@ -65,9 +66,10 @@ To rename it, `gws kill myapp.2` first, then `gws edit myapp`.
 gws
 ```
 
-The picker lists live sessions, projects, project panes that aren't running, and the
-directories under your search paths. A project opens its layout; anything else attaches. Type a name that matches nothing and press
-enter to start a new session with that name.
+The picker lists the current directory, other live sessions, projects, project panes
+that aren't running, and the directories under your search paths. A project opens its
+layout; anything else attaches. Type a name that matches nothing and press enter to
+start a new session with that name.
 
 Inside a zmx session, picking another session switches to it instead of nesting.
 
@@ -86,8 +88,9 @@ gws open myapp           # the whole layout
 gws attach myapp.server  # or one pane in this terminal
 ```
 
-`ctrl+\` detaches only the pane you're in, so `gws open` would still see the other panes
-as open. Close the window to step away from the whole project.
+Closed just one pane by accident? `gws open myapp` reopens only what isn't open
+anywhere, in a new tab, and leaves the rest of your window alone. `ctrl+\` detaches
+only the pane you're in, the same way.
 
 `gws list` shows what's running.
 

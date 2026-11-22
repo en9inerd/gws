@@ -7,170 +7,159 @@ import "core:sys/posix"
 FZF_NO_MATCH :: 1
 FZF_CANCELLED :: 130
 
-fzf :: proc(lines: []string, options: ..string) -> (output: []string, code: int) {
-	in_r, in_w, e1 := os.pipe()
-	out_r, out_w, e2 := os.pipe()
-	if e1 != nil || e2 != nil {
-		fail("cannot create pipe")
-	}
-	argv: [dynamic]string
-	append(&argv, "fzf")
-	append(&argv, ..options)
-	process, err := os.process_start(
-		{command = argv[:], stdin = in_r, stdout = out_w, stderr = os.stderr},
-	)
-	os.close(in_r)
-	os.close(out_w)
-	if err != nil {
-		fail("fzf not found in PATH (install fzf)")
-	}
-
-	// fzf may exit before reading everything (Esc); writes must not kill gws.
-	posix.sigignore(.SIGPIPE)
-	os.write_string(in_w, strings.join(lines, "\n"))
-	os.close(in_w)
-
-	out, _ := os.read_entire_file(out_r, context.allocator)
-	os.close(out_r)
-	state, _ := os.process_wait(process)
-	output, _ = strings.split_lines(strings.trim_right(string(out), "\n"))
-	return output, state.exit_code
-}
-
+// Prefixes that tell picker lines apart; plain lines are directories.
 HERE_PREFIX :: "[here] "
-ZMX_PREFIX :: "[zmx] "
+SESSION_PREFIX :: "[zmx] "
 PROJECT_PREFIX :: "[project] "
 PANE_PREFIX :: "[pane] "
 
-pick_candidates :: proc(g: Global, sessions: []Session) -> []string {
-	lines: [dynamic]string
-	if cwd, e := os.get_working_directory(context.allocator); e == nil {
-		append(&lines, cat(HERE_PREFIX, cwd))
+// Output lines of fzf (always at least one, possibly "") and its exit code.
+fzf :: proc(lines: []string, options: ..string) -> (output: []string, exit_code: int) {
+	stdin_r, stdin_w, pipe_err1 := os.pipe()
+	stdout_r, stdout_w, pipe_err2 := os.pipe()
+	if pipe_err1 != nil || pipe_err2 != nil {
+		fail("cannot create pipe")
 	}
-	for s in sessions {
-		append(
-			&lines,
-			cat(
-				ZMX_PREFIX,
-				pad(s.name, 24),
-				"clients:",
-				pad(itoa(s.clients), 2),
-				collapse_home(s.dir),
-			),
-		)
+	command: [dynamic]string
+	append(&command, "fzf")
+	append(&command, ..options)
+	process, start_err := os.process_start(
+		{command = command[:], stdin = stdin_r, stdout = stdout_w, stderr = os.stderr},
+	)
+	os.close(stdin_r)
+	os.close(stdout_w)
+	if start_err != nil {
+		fail("fzf not found in PATH (install fzf)")
+	}
+
+	// fzf may exit before reading everything (Esc); writes must not kill gws. Restored
+	// after: an ignored SIGPIPE survives exec into zmx and every shell it starts.
+	previous_handler := posix.signal(.SIGPIPE, auto_cast posix.SIG_IGN)
+	os.write_string(stdin_w, strings.join(lines, "\n"))
+	os.close(stdin_w)
+	posix.signal(.SIGPIPE, previous_handler)
+
+	data, _ := os.read_entire_file(stdout_r, context.allocator)
+	os.close(stdout_r)
+	state, _ := os.process_wait(process)
+	output = strings.split_lines(strings.trim_right(string(data), "\n"))
+	return output, state.exit_code
+}
+
+// The current directory, live sessions except this one, projects, project panes that
+// are not running, then directories under the search paths.
+picker_lines :: proc(config: Config, sessions: []Session) -> []string {
+	lines: [dynamic]string
+	if cwd, err := os.get_working_directory(context.allocator); err == nil {
+		append(&lines, concat(HERE_PREFIX, cwd))
+	}
+	current_session := get_env("ZMX_SESSION")
+	for session in sessions {
+		if session.name == current_session {
+			continue
+		}
+		clients := pad_right(int_to_string(session.clients), 2)
+		append(&lines, concat(SESSION_PREFIX, pad_right(session.name, 24), "clients:", clients, collapse_home(session.dir)))
 	}
 	names := project_names()
 	for name in names {
-		append(&lines, cat(PROJECT_PREFIX, name))
+		append(&lines, concat(PROJECT_PREFIX, name))
 	}
 	for name in names {
-		p, err := try_load_project(name, g)
+		project, err := try_load_project(name, config)
 		if err != "" {
 			continue
 		}
-		for pane in p.panes {
-			sn := session_name(p.name, pane.name)
-			if _, live := find_session(sessions, sn); !live {
-				append(&lines, cat(PANE_PREFIX, sn))
+		for pane in project.panes {
+			session := session_name(project.name, pane.name)
+			if !is_session_live(sessions, session) {
+				append(&lines, concat(PANE_PREFIX, session))
 			}
 		}
 	}
-	for sp in g.search {
-		walk_dirs(sp.path, sp.depth if sp.depth > 0 else g.depth, &lines)
+	for search in config.search_paths {
+		depth := search.depth if search.depth > 0 else config.search_depth
+		walk_dirs(search.path, depth, &lines)
 	}
 	return lines[:]
 }
 
 cmd_pick :: proc(kill: bool) {
-	g := load_global()
-	sessions := zmx_sessions()
-	defer delete_sessions(sessions)
-
 	if kill {
-		names: [dynamic]string
-		for s in sessions {
-			append(&names, s.name)
-		}
-		if len(names) == 0 {
-			say("no live sessions")
-			return
-		}
-		out, _ := fzf(names[:], "--prompt=kill> ", "--height=40%", "--border=rounded", "--reverse")
-		if out[0] != "" {
-			kill_sessions(out[:1])
-		}
+		pick_and_kill()
 		return
 	}
 
-	out, code := fzf(
-		pick_candidates(g, sessions[:]),
+	config := load_config()
+	output, exit_code := fzf(
+		picker_lines(config, live_sessions()),
 		"--print-query",
 		"--prompt=session> ",
 		"--height=80%",
 		"--reverse",
 		"--border=rounded",
 	)
-	if code == FZF_CANCELLED {
+	if exit_code == FZF_CANCELLED {
 		return
 	}
-	query := out[0]
-	sel := out[1] if len(out) > 1 else ""
+	query := output[0]
+	selection := output[1] if len(output) > 1 else ""
 	switch {
-	case strings.has_prefix(sel, ZMX_PREFIX):
-		fields := strings.fields(sel[len(ZMX_PREFIX):])
-		attach_here(fields[0], "", "")
-	case strings.has_prefix(sel, PROJECT_PREFIX):
-		open_project(sel[len(PROJECT_PREFIX):], false)
-	case strings.has_prefix(sel, PANE_PREFIX):
-		attach_target(sel[len(PANE_PREFIX):], g)
-	case strings.has_prefix(sel, HERE_PREFIX):
-		attach_dir(sel[len(HERE_PREFIX):])
-	case sel != "":
-		attach_dir(sel)
-	case code == FZF_NO_MATCH && query != "":
+	case strings.has_prefix(selection, SESSION_PREFIX):
+		fields := strings.fields(selection[len(SESSION_PREFIX):])
+		attach_session(fields[0], "", "")
+	case strings.has_prefix(selection, PROJECT_PREFIX):
+		open_project(selection[len(PROJECT_PREFIX):], false)
+	case strings.has_prefix(selection, PANE_PREFIX):
+		attach_target(selection[len(PANE_PREFIX):], config)
+	case strings.has_prefix(selection, HERE_PREFIX):
+		attach_dir(selection[len(HERE_PREFIX):])
+	case selection != "":
+		attach_dir(selection)
+	case exit_code == FZF_NO_MATCH && query != "":
+		// A new session named after what was typed.
 		name := sanitize_name(query)
-		if !valid_name(name) {
-			delete(name)
-			fail("invalid session name ", quote(query))
+		if !is_valid_name(name) {
+			fail("invalid session name ", quoted(query))
 		}
-		attach_here(name, "", "")
+		attach_session(name, "", "")
 	}
 }
 
-// The only project, else the one whose dir is the current directory, else fzf.
+pick_and_kill :: proc() {
+	names: [dynamic]string
+	for session in live_sessions() {
+		append(&names, session.name)
+	}
+	if len(names) == 0 {
+		print_line("no live sessions")
+		return
+	}
+	output, _ := fzf(names[:], "--prompt=kill> ", "--height=40%", "--border=rounded", "--reverse")
+	if output[0] != "" {
+		kill_sessions(output[:1])
+	}
+}
+
+// The project whose dir is the current directory, else the only one, else fzf.
+// "" when the picker is cancelled.
 pick_project :: proc() -> string {
 	names := project_names()
-	switch len(names) {
-	case 0:
+	if len(names) == 0 {
 		fail("no projects (create one: gws new <name>)")
-	case 1:
-		return names[0]
 	}
-	if cwd, e := os.get_working_directory(context.allocator); e == nil {
-		g := load_global()
+	if cwd, err := os.get_working_directory(context.allocator); err == nil {
+		config := load_config()
 		for name in names {
-			if p, err := try_load_project(name, g);
-			   err == "" && strings.trim_right(p.dir, "/") == cwd {
+			project, load_err := try_load_project(name, config)
+			if load_err == "" && strings.trim_right(project.dir, "/") == cwd {
 				return name
 			}
 		}
 	}
-	out, _ := fzf(names, "--prompt=project> ", "--height=40%", "--border=rounded", "--reverse")
-	return out[0]
-}
-
-attach_dir :: proc(dir: string) -> ! {
-	name := sanitize_name(os.base(dir))
-	if !valid_name(name) {
-		fail("cannot derive a session name from ", dir)
+	if len(names) == 1 {
+		return names[0]
 	}
-	attach_here(name, dir, "")
-}
-
-delete_sessions :: proc(sessions: [dynamic]Session) {
-	for s in sessions {
-		delete(s.name)
-		delete(s.dir)
-	}
-	delete(sessions)
+	output, _ := fzf(names, "--prompt=project> ", "--height=40%", "--border=rounded", "--reverse")
+	return output[0]
 }
