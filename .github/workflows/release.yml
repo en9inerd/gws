@@ -28,7 +28,7 @@ jobs:
       - name: Set up Odin
         uses: laytan/setup-odin@v2
         with:
-          release: nightly
+          release: latest
 
       - name: Check
         run: make check
@@ -118,7 +118,7 @@ jobs:
       - name: Set up Odin
         uses: laytan/setup-odin@v2
         with:
-          release: nightly
+          release: latest
 
       - name: Build and package
         env:
