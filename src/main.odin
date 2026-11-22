@@ -65,7 +65,10 @@ project_arg :: proc(a: Args, usage: string) -> string {
 }
 
 abs_dir :: proc(arg: string) -> string {
-	dir, e := os.get_absolute_path(expand_home(arg), context.allocator)
+	expanded := expand_home(arg)
+	defer delete(expanded)
+
+	dir, e := os.get_absolute_path(expanded, context.allocator)
 	if e != nil || !os.is_dir(dir) {
 		fail("not a directory: ", arg)
 	}
@@ -73,37 +76,50 @@ abs_dir :: proc(arg: string) -> string {
 }
 
 main :: proc() {
+	a: Args
+	defer delete_args(&a)
+
 	args := os.args[1:]
 	if len(args) == 0 {
 		cmd_pick(false)
 		return
 	}
+
 	rest := args[1:]
 	switch args[0] {
 	case "pick":
-		a := parse_args(rest, "--kill")
+		a = parse_args(rest, "--kill")
 		cmd_pick(a.flags["--kill"])
 	case "new":
-		cmd_new(parse_args(rest))
+		a = parse_args(rest)
+		cmd_new(a)
 	case "edit":
-		cmd_edit(parse_args(rest))
+		a = parse_args(rest)
+		cmd_edit(a)
 	case "attach":
-		cmd_attach(parse_args(rest))
+		a = parse_args(rest)
+		cmd_attach(a)
 	case "open":
-		cmd_open(parse_args(rest, "--force"))
+		a = parse_args(rest, "--force")
+		cmd_open(a)
 	case "split":
-		cmd_split(parse_args(rest))
+		a = parse_args(rest)
+		cmd_split(a)
 	case "tab":
-		if len(parse_args(rest).pos) > 0 {
+		if len(rest) > 0 {
 			usage_error("gws tab")
 		}
-		add_pane(load_global(), "")
+		g := load_global()
+		defer delete_global(&g)
+		add_pane(g, "")
 	case "list":
 		cmd_list()
 	case "kill":
-		cmd_kill(parse_args(rest))
+		a = parse_args(rest)
+		cmd_kill(a)
 	case "delete":
-		cmd_delete(parse_args(rest, "--yes"))
+		a = parse_args(rest, "--yes")
+		cmd_delete(a)
 	case "help", "-h", "--help":
 		os.write_string(os.stdout, USAGE)
 	case:
@@ -124,11 +140,17 @@ cmd_new :: proc(a: Args) {
 		fail("project ", quote(name), " already exists (gws edit ", name, ")")
 	}
 	dir := abs_dir(a.pos[1] if len(a.pos) == 2 else ".")
+	defer delete(dir)
+
 	if e := os.make_directory_all(projects_dir()); e != nil && e != .Exist {
 		fail("cannot create ", projects_dir(), ": ", os.error_string(e))
 	}
 	path := project_path(name)
-	if e := os.write_entire_file(path, new_project_text(collapse_home(dir))); e != nil {
+
+	text := new_project_text(collapse_home(dir))
+	defer delete(text)
+
+	if e := os.write_entire_file(path, text); e != nil {
 		fail("cannot write ", path, ": ", os.error_string(e))
 	}
 	say("created ", collapse_home(path))
@@ -149,6 +171,7 @@ cmd_attach :: proc(a: Args) {
 	if len(a.pos) != 1 {
 		usage_error("gws attach <name>[.<pane>] | <dir>")
 	}
+
 	target := a.pos[0]
 	// Names cannot contain these, so a path is never mistaken for a session.
 	if strings.contains(target, "/") ||
@@ -156,6 +179,7 @@ cmd_attach :: proc(a: Args) {
 	   strings.has_prefix(target, "~") {
 		attach_dir(abs_dir(target))
 	}
+
 	attach_target(target, load_global())
 }
 
@@ -187,11 +211,23 @@ cmd_open :: proc(a: Args) {
 
 open_project :: proc(name: string, force: bool) {
 	require_macos("open")
-	p := load_project(name, load_global())
+
+	g := load_global()
+	defer delete_global(&g)
+
+	p := load_project(name, g)
+	defer delete_project(&p)
+
 	if len(p.panes) == 0 {
 		fail("project ", quote(p.name), " has no panes (gws edit ", p.name, ")")
 	}
 	sessions := zmx_sessions()
+	defer {
+		for &s in sessions {
+			delete(s.dir)
+		}
+		delete(sessions)
+	}
 	for pane in p.panes {
 		if !os.is_dir(pane.dir) {
 			fail(p.name, ".", pane.name, ": not a directory: ", pane.dir)
@@ -207,9 +243,15 @@ open_project :: proc(name: string, force: bool) {
 		}
 	}
 	here := ghostty_tty()
-	if err := run_applescript(build_open_script(p, here)); err != "" {
+
+	script := build_open_script(p, here)
+	defer delete(script)
+
+	err := run_applescript(script)
+	if err != "" {
 		fail(err)
 	}
+
 	if here != "" {
 		first := p.panes[0]
 		attach_here(session_name(p.name, first.name), first.dir, first.cmd)
@@ -222,6 +264,8 @@ cmd_split :: proc(a: Args) {
 		usage_error("gws split [right|left|down|up]")
 	}
 	g := load_global()
+	defer delete_global(&g)
+
 	direction := a.pos[0] if len(a.pos) == 1 else g.split
 	if !valid_split(direction) {
 		fail("split must be right, left, down or up")
@@ -233,14 +277,20 @@ cmd_split :: proc(a: Args) {
 add_pane :: proc(g: Global, direction: string) {
 	require_macos("split" if direction != "" else "tab")
 	current := get_env("ZMX_SESSION")
+	defer delete(current)
+
 	if current == "" {
 		fail("not inside a zmx session")
 	}
+
 	project, pane_name, _ := split_session(current)
 	if !project_exists(project) {
 		fail("session ", quote(current), " is not part of a gws project")
 	}
+
 	p := load_project(project, g)
+	defer delete_project(&p)
+
 	pane := Pane {
 		tab   = "main",
 		dir   = p.dir,
@@ -254,33 +304,55 @@ add_pane :: proc(g: Global, direction: string) {
 	}
 
 	sessions := zmx_sessions()
+	defer {
+		for &s in sessions {
+			delete(s.dir)
+		}
+		delete(sessions)
+	}
+
 	for n := 2;; n += 1 {
-		pane.name = itoa(n)
-		_, taken := find_pane(p, pane.name)
-		if _, live := find_session(sessions[:], session_name(p.name, pane.name)); live {
+		candidate := itoa(n)
+
+		_, taken := find_pane(p, candidate)
+		if _, live := find_session(sessions[:], session_name(p.name, candidate)); live {
 			taken = true
 		}
 		for q in p.panes {
-			if q.tab == pane.name {
+			if q.tab == candidate {
 				taken = true
 			}
 		}
+
 		if !taken {
+			pane.name = candidate
 			break
 		}
+		delete(candidate)
 	}
+	defer delete(pane.name)
+
 	before := ""
 	if direction == "" {
 		before = next_tab_pane(p, pane.tab)
 		pane.tab = pane.name
 	}
 	// The new pane runs `gws attach`, which reads the file, so write it first.
-	original, _ := os.read_entire_file(p.path, context.allocator)
+	original, e := os.read_entire_file(p.path, context.allocator)
+	if e != nil {
+		fail("cannot read ", p.path, ": ", os.error_string(e))
+	}
+	defer delete(original)
+
 	if e := insert_pane(p, pane, before); e != nil {
 		fail("cannot update ", p.path, ": ", os.error_string(e))
 	}
+
 	session := session_name(p.name, pane.name)
-	if err := run_applescript(build_add_script(session, pane)); err != "" {
+	script := build_add_script(session, pane)
+	defer delete(script)
+
+	if err := run_applescript(script); err != "" {
 		_ = os.write_entire_file(p.path, string(original))
 		fail(err)
 	}
@@ -289,14 +361,29 @@ add_pane :: proc(g: Global, direction: string) {
 
 cmd_list :: proc() {
 	g := load_global()
+	defer delete_global(&g)
+
 	sessions := zmx_sessions()
+	defer {
+		for &s in sessions {
+			delete(s.dir)
+		}
+		delete(sessions)
+	}
+
 	names := project_names()
+	defer delete(names)
+
 	claimed: map[string]bool
+	defer delete(claimed)
 
 	if len(names) > 0 {
 		say(pad("PROJECT", 20), pad("PANES", 7), "DIR")
 		for name in names {
 			p, err := try_load_project(name, g)
+			defer delete_project(&p)
+			defer delete(err)
+
 			if err != "" {
 				say(pad(name, 20), pad("error", 7), err)
 				continue
@@ -309,15 +396,24 @@ cmd_list :: proc() {
 					live += 1
 				}
 			}
-			say(
-				pad(name, 20),
-				pad(cat(itoa(live), "/", itoa(len(p.panes))), 7),
-				collapse_home(p.dir),
-			)
+
+			{
+				live_text := itoa(live)
+				total_text := itoa(len(p.panes))
+				counts := cat(live_text, "/", total_text)
+
+				defer delete(live_text)
+				defer delete(total_text)
+				defer delete(counts)
+
+				say(pad(name, 20), pad(counts, 7), collapse_home(p.dir))
+			}
 		}
 	}
 
 	others: [dynamic]Session
+	defer delete(others)
+
 	for s in sessions {
 		if !claimed[s.name] {
 			append(&others, s)
@@ -329,7 +425,9 @@ cmd_list :: proc() {
 		}
 		say(pad("SESSION", 20), pad("CLIENTS", 7), "DIR")
 		for s in others {
-			say(pad(s.name, 20), pad(itoa(s.clients), 7), collapse_home(s.dir))
+			clients := itoa(s.clients)
+			defer delete(clients)
+			say(pad(s.name, 20), pad(clients, 7), collapse_home(s.dir))
 		}
 	}
 	if len(names) == 0 && len(others) == 0 {
@@ -343,6 +441,8 @@ cmd_kill :: proc(a: Args) {
 	}
 	if len(a.pos) == 0 {
 		current := get_env("ZMX_SESSION")
+		defer delete(current)
+
 		if current == "" {
 			usage_error("gws kill [name[.pane]]  (no argument: current zmx session)")
 		}
@@ -351,8 +451,18 @@ cmd_kill :: proc(a: Args) {
 	}
 	target := a.pos[0]
 	sessions := zmx_sessions()
+	defer {
+		for &s in sessions {
+			delete(s.dir)
+		}
+		delete(sessions)
+	}
+
 	if project_exists(target) {
-		if names := project_sessions(target, sessions[:]); len(names) > 0 {
+		names := project_sessions(target, sessions[:])
+		defer delete(names)
+
+		if len(names) > 0 {
 			kill_sessions(names)
 			return
 		}
@@ -374,7 +484,12 @@ cmd_delete :: proc(a: Args) {
 		fail("project ", quote(name), " not found")
 	}
 	if has_pane {
-		p := load_project(name, load_global())
+		g := load_global()
+		defer delete_global(&g)
+
+		p := load_project(name, g)
+		defer delete_project(&p)
+
 		if _, ok := find_pane(p, pane_name); !ok {
 			fail("pane ", quote(target), " not found")
 		}
@@ -387,17 +502,31 @@ cmd_delete :: proc(a: Args) {
 				"; rerun with --yes",
 			)
 		}
+
 		data, e := os.read_entire_file(p.path, context.allocator)
-		if e == nil {
-			e = os.write_entire_file(p.path, remove_section(string(data), pane_name))
-		}
 		if e != nil {
+			fail("cannot read ", p.path, ": ", os.error_string(e))
+		}
+		defer delete(data)
+
+		updated := remove_section(string(data), pane_name)
+		defer delete(updated)
+
+		if e = os.write_entire_file(p.path, updated); e != nil {
 			fail("cannot update ", p.path, ": ", os.error_string(e))
 		}
 		say("deleted ", target)
-		if _, live := find_session(zmx_sessions()[:], target); live {
+
+		sessions := zmx_sessions()
+		if _, live := find_session(sessions[:], target); live {
+			// Keep sessions alive until kill_sessions has finished.
 			kill_sessions({target})
 		}
+		for &s in sessions {
+			delete(s.dir)
+		}
+		delete(sessions)
+
 		return
 	}
 	if !a.flags["--yes"] {
@@ -408,7 +537,23 @@ cmd_delete :: proc(a: Args) {
 		fail("cannot remove ", path, ": ", os.error_string(e))
 	}
 	say("deleted ", collapse_home(path))
-	if names := project_sessions(name, zmx_sessions()[:]); len(names) > 0 {
+
+	sessions := zmx_sessions()
+	names := project_sessions(name, sessions[:])
+
+	if len(names) > 0 {
 		kill_sessions(names)
 	}
+
+	delete(names)
+	for &s in sessions {
+		delete(s.dir)
+	}
+	delete(sessions)
+}
+
+delete_args :: proc(a: ^Args) {
+	delete(a.pos)
+	delete(a.flags)
+	a^ = {}
 }

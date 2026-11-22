@@ -84,6 +84,7 @@ pick_candidates :: proc(g: Global, sessions: []Session) -> []string {
 cmd_pick :: proc(kill: bool) {
 	g := load_global()
 	sessions := zmx_sessions()
+	defer delete_sessions(sessions)
 
 	if kill {
 		names: [dynamic]string
@@ -129,6 +130,7 @@ cmd_pick :: proc(kill: bool) {
 	case code == FZF_NO_MATCH && query != "":
 		name := sanitize_name(query)
 		if !valid_name(name) {
+			delete(name)
 			fail("invalid session name ", quote(query))
 		}
 		attach_here(name, "", "")
@@ -163,4 +165,12 @@ attach_dir :: proc(dir: string) -> ! {
 		fail("cannot derive a session name from ", dir)
 	}
 	attach_here(name, dir, "")
+}
+
+delete_sessions :: proc(sessions: [dynamic]Session) {
+	for s in sessions {
+		delete(s.name)
+		delete(s.dir)
+	}
+	delete(sessions)
 }

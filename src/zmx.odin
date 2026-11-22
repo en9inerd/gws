@@ -15,12 +15,15 @@ Session :: struct {
 parse_zmx_list :: proc(out: string) -> [dynamic]Session {
 	sessions: [dynamic]Session
 	rest := out
+
 	for raw in strings.split_lines_iterator(&rest) {
 		line := strings.trim_left_space(strings.trim_prefix(strings.trim_left_space(raw), "→"))
 		s: Session
 		dead := false
+
 		for field in strings.split_iterator(&line, "\t") {
 			key, _, value := strings.partition(field, "=")
+
 			switch key {
 			case "name":
 				s.name = value
@@ -34,6 +37,8 @@ parse_zmx_list :: proc(out: string) -> [dynamic]Session {
 		}
 		if !dead && s.name != "" {
 			append(&sessions, s)
+		} else {
+			delete(s.dir)
 		}
 	}
 	return sessions
@@ -45,8 +50,12 @@ decode_cwd :: proc(v: string) -> string {
 	if i := strings.index_byte(path, '/'); i >= 0 {
 		path = path[i:]
 	}
+
 	decoded, ok := net.percent_decode(path)
-	return decoded if ok else path
+	if ok {
+		return decoded
+	}
+	return cat(path)
 }
 
 zmx_sessions :: proc() -> [dynamic]Session {
@@ -68,9 +77,18 @@ find_session :: proc(sessions: []Session, name: string) -> (Session, bool) {
 
 // Drops back to an interactive shell when cmd exits or on ctrl+c, so the session stays alive.
 pane_wrapper :: proc(cmd: string) -> string {
-	sh := shell_quote(shell_path())
+	sh := get_env("SHELL")
+	defer delete(sh)
+
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+
+	quoted := shell_quote(sh)
+	defer delete(quoted)
+
 	// Newlines, not ';': cmd may end with '&' or a '#' comment.
-	return cat("trap \"exec ", sh, "\" INT\n", cmd, "\nexec ", sh)
+	return cat("trap \"exec ", quoted, "\" INT\n", cmd, "\nexec ", sh)
 }
 
 attach_here :: proc(session, dir, cmd: string) -> ! {

@@ -10,9 +10,17 @@ cat :: proc(parts: ..string) -> string {
 	return strings.concatenate(parts)
 }
 
+write_cat :: proc(b: ^strings.Builder, parts: ..string) {
+	s := cat(..parts)
+	defer delete(s)
+	strings.write_string(b, s)
+}
+
 itoa :: proc(n: int) -> string {
 	buf := make([]u8, 24)
-	return strconv.write_int(buf, i64(n), 10)
+	defer delete(buf)
+
+	return strings.clone(strconv.write_int(buf, i64(n), 10))
 }
 
 quote :: proc(s: string) -> string {
@@ -73,14 +81,18 @@ get_env :: proc(key: string) -> string {
 
 shell_path :: proc() -> string {
 	sh := get_env("SHELL")
+	defer delete(sh)
+
 	return sh if sh != "" else "/bin/sh"
 }
 
 expand_home :: proc(path: string) -> string {
 	if path == "~" || strings.has_prefix(path, "~/") {
-		return cat(get_env("HOME"), path[1:])
+		home := get_env("HOME")
+		defer delete(home)
+		return cat(home, path[1:])
 	}
-	return path
+	return cat(path)
 }
 
 collapse_home :: proc(path: string) -> string {
@@ -92,14 +104,38 @@ collapse_home :: proc(path: string) -> string {
 }
 
 shell_quote :: proc(s: string) -> string {
-	quoted, _ := strings.replace_all(s, "'", `'\''`)
-	return cat("'", quoted, "'")
+	b := strings.builder_make()
+	strings.write_byte(&b, '\'')
+
+	for c in s {
+		if c == '\'' {
+			strings.write_string(&b, `'\''`)
+		} else {
+			strings.write_rune(&b, c)
+		}
+	}
+
+	strings.write_byte(&b, '\'')
+	return strings.to_string(b)
 }
 
 applescript_string :: proc(s: string) -> string {
-	escaped, _ := strings.replace_all(s, `\`, `\\`)
-	escaped, _ = strings.replace_all(escaped, `"`, `\"`)
-	return quote(escaped)
+	b := strings.builder_make()
+	strings.write_byte(&b, '"')
+
+	for c in s {
+		switch c {
+		case '\\':
+			strings.write_string(&b, `\\`)
+		case '"':
+			strings.write_string(&b, `\"`)
+		case:
+			strings.write_rune(&b, c)
+		}
+	}
+
+	strings.write_byte(&b, '"')
+	return strings.to_string(b)
 }
 
 name_char :: proc(c: u8) -> bool {
@@ -131,4 +167,9 @@ sanitize_name :: proc(s: string) -> string {
 		strings.write_byte(&b, c)
 	}
 	return strings.to_string(b)
+}
+
+write_pane_name :: proc(b: ^strings.Builder, i: int) {
+	strings.write_string(b, "pane")
+	strings.write_int(b, i)
 }

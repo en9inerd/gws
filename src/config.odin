@@ -40,7 +40,16 @@ Ini_Entry :: struct {
 }
 
 line_error :: proc(line: int, parts: ..string) -> string {
-	return cat("line ", itoa(line), ": ", cat(..parts))
+	b := strings.builder_make()
+	strings.write_string(&b, "line ")
+	strings.write_int(&b, line)
+	strings.write_string(&b, ": ")
+
+	for part in parts {
+		strings.write_string(&b, part)
+	}
+
+	return strings.to_string(b)
 }
 
 // `[section]`, `key = value`, whole-line `;`/`#` comments. Unlike core:encoding/ini's
@@ -48,16 +57,21 @@ line_error :: proc(line: int, parts: ..string) -> string {
 parse_ini :: proc(text: string) -> (entries: [dynamic]Ini_Entry, err: string) {
 	rest := text
 	n := 0
+
 	for raw in strings.split_lines_iterator(&rest) {
 		n += 1
 		line := strings.trim_space(raw)
+
 		if line == "" || line[0] == ';' || line[0] == '#' {
 			continue
 		}
+
 		if line[0] == '[' {
 			if !strings.has_suffix(line, "]") {
-				return entries, line_error(n, "missing ']'")
+				delete(entries)
+				return {}, line_error(n, "missing ']'")
 			}
+
 			append(
 				&entries,
 				Ini_Entry {
@@ -68,18 +82,23 @@ parse_ini :: proc(text: string) -> (entries: [dynamic]Ini_Entry, err: string) {
 			)
 			continue
 		}
+
 		key, eq, value := strings.partition(line, "=")
 		if eq == "" {
-			return entries, line_error(n, "expected 'key = value'")
+			delete(entries)
+			return {}, line_error(n, "expected 'key = value'")
 		}
+
 		value = strings.trim_space(value)
 		if len(value) >= 2 && value[0] == '"' {
 			if s, _, ok := strconv.unquote_string(value); ok {
 				value = s
 			}
 		}
+
 		append(&entries, Ini_Entry{line = n, key = strings.trim_space(key), value = value})
 	}
+
 	return entries, ""
 }
 
@@ -93,23 +112,28 @@ valid_split :: proc(s: string) -> bool {
 
 parse_project :: proc(name, text, default_split: string) -> (p: Project, err: string) {
 	p.name = name
+
 	entries, ini_err := parse_ini(text)
 	if ini_err != "" {
 		return p, ini_err
 	}
+	defer delete(entries)
+
 	for e in entries {
 		if e.is_section {
 			if !valid_name(e.key) {
 				return p, line_error(
 					e.line,
 					"invalid pane name ",
-					quote(e.key),
+					`"`,
+					e.key,
+					`"`,
 					" (use A-Z a-z 0-9 _ -)",
 				)
 			}
 			for q in p.panes {
 				if q.name == e.key {
-					return p, line_error(e.line, "duplicate pane ", quote(e.key))
+					return p, line_error(e.line, "duplicate pane ", `"`, e.key, `"`)
 				}
 			}
 			append(&p.panes, Pane{name = e.key, tab = "main", split = default_split})
@@ -118,6 +142,9 @@ parse_project :: proc(name, text, default_split: string) -> (p: Project, err: st
 		if len(p.panes) == 0 {
 			switch e.key {
 			case "dir":
+				if p.dir != "" {
+					delete(p.dir)
+				}
 				p.dir = expand_home(e.value)
 			case:
 				return p, line_error(e.line, "unknown project key ", quote(e.key))
@@ -130,7 +157,7 @@ parse_project :: proc(name, text, default_split: string) -> (p: Project, err: st
 			pane.cmd = e.value
 		case "tab":
 			if !valid_name(e.value) {
-				return p, line_error(e.line, "invalid tab name ", quote(e.value))
+				return p, line_error(e.line, "invalid tab name ", `"`, e.value, `"`)
 			}
 			pane.tab = e.value
 		case "split":
@@ -140,26 +167,31 @@ parse_project :: proc(name, text, default_split: string) -> (p: Project, err: st
 			pane.split = e.value
 		case "from":
 			if !valid_name(e.value) {
-				return p, line_error(e.line, "invalid pane name ", quote(e.value))
+				return p, line_error(e.line, "invalid pane name ", `"`, e.value, `"`)
 			}
 			pane.from = e.value
 		case "dir":
+			if pane.dir != "" {
+				delete(pane.dir)
+			}
 			pane.dir = expand_home(e.value)
 		case:
-			return p, line_error(e.line, "unknown pane key ", quote(e.key))
+			return p, line_error(e.line, "unknown pane key ", `"`, e.key, `"`)
 		}
 	}
 	if p.dir == "" {
-		return p, "missing 'dir = ...'"
+		return p, cat("missing 'dir = ...'")
 	}
 	if !strings.has_prefix(p.dir, "/") {
-		return p, "dir must be absolute or start with ~/"
+		return p, cat("dir must be absolute or start with ~/")
 	}
 	for &pane in p.panes {
 		if pane.dir == "" {
-			pane.dir = p.dir
+			pane.dir = cat(p.dir)
 		} else if !strings.has_prefix(pane.dir, "/") {
-			pane.dir = cat(p.dir, "/", pane.dir)
+			expanded := cat(p.dir, "/", pane.dir)
+			delete(pane.dir)
+			pane.dir = expanded
 		}
 	}
 	return p, ""
@@ -170,6 +202,8 @@ parse_global :: proc(text: string, g: ^Global) -> string {
 	if ini_err != "" {
 		return ini_err
 	}
+	defer delete(entries)
+
 	for e in entries {
 		if e.is_section {
 			return line_error(e.line, "sections are not used in config.ini")
@@ -266,6 +300,7 @@ try_load_project :: proc(name: string, g: Global) -> (p: Project, err: string) {
 
 load_project :: proc(name: string, g: Global) -> Project {
 	p, err := try_load_project(name, g)
+	defer delete_project(&p)
 	if err != "" {
 		fail(err)
 	}
@@ -317,6 +352,8 @@ new_project_text :: proc(dir: string) -> string {
 // current one, so a new tab's section goes before this pane.
 next_tab_pane :: proc(p: Project, tab: string) -> string {
 	seen: map[string]bool
+	defer delete(seen)
+
 	for q in p.panes {
 		if seen[tab] && !seen[q.tab] {
 			return q.name
@@ -329,36 +366,54 @@ next_tab_pane :: proc(p: Project, tab: string) -> string {
 // Writes the pane's section before the `[before]` header, or at the end when there is none.
 insert_pane :: proc(p: Project, pane: Pane, before: string) -> os.Error {
 	data := os.read_entire_file(p.path, context.allocator) or_return
-	section := cat("[", pane.name, "]\ntab = ", pane.tab, "\n")
-	if pane.split != "" {
-		section = cat(section, "split = ", pane.split, "\n")
-	}
-	if pane.from != "" {
-		section = cat(section, "from = ", pane.from, "\n")
-	}
-	if pane.dir != p.dir {
-		section = cat(section, "dir = ", pane.dir, "\n")
-	}
-	return os.write_entire_file(p.path, insert_section(string(data), section, before))
+	defer delete(data)
+
+	section := cat(
+		"[",
+		pane.name,
+		"]\ntab = ",
+		pane.tab,
+		"\n",
+		"split = " if pane.split != "" else "",
+		pane.split,
+		"\n" if pane.split != "" else "",
+		"from = " if pane.from != "" else "",
+		pane.from,
+		"\n" if pane.from != "" else "",
+		"dir = " if pane.dir != p.dir else "",
+		pane.dir,
+		"\n" if pane.dir != p.dir else "",
+	)
+	defer delete(section)
+
+	result := insert_section(string(data), section, before)
+	defer delete(result)
+
+	return os.write_entire_file(p.path, result)
 }
 
 insert_section :: proc(text, section, before: string) -> string {
-	b := strings.builder_make()
+	b := strings.builder_make(context.allocator)
+
 	rest := text
 	inserted := false
+
 	for line in strings.split_lines_after_iterator(&rest) {
 		if name, ok := section_name(line); ok && name == before {
-			strings.write_string(&b, cat(section, "\n"))
+			write_cat(&b, section, "\n")
 			inserted = true
 		}
+
 		strings.write_string(&b, line)
 	}
+
 	if !inserted {
 		if len(text) > 0 && !strings.has_suffix(text, "\n") {
 			strings.write_byte(&b, '\n')
 		}
-		strings.write_string(&b, cat("\n", section))
+		write_cat(&b, "\n", section)
 	}
+
 	return strings.to_string(b)
 }
 
@@ -384,4 +439,28 @@ section_name :: proc(line: string) -> (string, bool) {
 		return "", false
 	}
 	return strings.trim_space(strings.trim_suffix(t, "]")[1:]), true
+}
+
+delete_project :: proc(p: ^Project) {
+	if p.dir != "" {
+		delete(p.dir)
+	}
+
+	for &pane in p.panes {
+		if pane.dir != "" {
+			delete(pane.dir)
+		}
+	}
+
+	delete(p.panes)
+	p^ = {}
+}
+
+delete_global :: proc(g: ^Global) {
+	for &sp in g.search {
+		delete(sp.path)
+	}
+
+	delete(g.search)
+	g^ = {}
 }

@@ -12,7 +12,7 @@ check:
 	$(ODIN) check src -vet -strict-style
 
 test:
-	$(ODIN) test src -define:ODIN_TEST_TRACK_MEMORY=false
+	$(ODIN) test src -define:ODIN_TEST_TRACK_MEMORY=true
 
 install: build
 	install -d $(PREFIX)/bin
