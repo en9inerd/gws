@@ -28,6 +28,7 @@ jobs:
       - name: Set up Odin
         uses: laytan/setup-odin@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
 
       - name: Check
@@ -118,6 +119,7 @@ jobs:
       - name: Set up Odin
         uses: laytan/setup-odin@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           release: latest
 
       - name: Build and package
