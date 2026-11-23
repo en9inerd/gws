@@ -126,7 +126,7 @@ jobs:
         env:
           VERSION: ${{ needs.tag.outputs.version }}
           TARGET_FILTER: ${{ matrix.filter }}
-        run: bash ./scripts/odin-release.sh
+        run: bash ./scripts/release.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
