@@ -71,6 +71,8 @@ replace_process :: proc(command: []string) -> ! {
 	for arg, i in command {
 		argv[i] = strings.clone_to_cstring(arg)
 	}
+
+	posix.signal(.SIGPIPE, auto_cast posix.SIG_DFL)
 	posix.execvp(argv[0], raw_data(argv))
 	fail("cannot run ", command[0], ": ", string(posix.strerror()))
 }
