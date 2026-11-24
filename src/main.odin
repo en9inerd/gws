@@ -171,6 +171,7 @@ cmd_attach :: proc(args: Args) {
 }
 
 cmd_open :: proc(args: Args) {
+	// Also checked in open_project, but this fails before the picker opens.
 	require_macos("open")
 	name := project_name_arg(args, "gws open [name] [--force]")
 	if name == "" {
@@ -335,9 +336,11 @@ cmd_list :: proc() {
 		if len(names) > 0 {
 			print_line()
 		}
-		print_line(pad_right("SESSION", 20), pad_right("CLIENTS", 7), "DIR")
+		print_line(pad_right("SESSION", 20), pad_right("PID", 7), pad_right("CLIENTS", 7), "DIR")
 		for session in others {
-			print_line(pad_right(session.name, 20), pad_right(int_to_string(session.clients), 7), collapse_home(session.dir))
+			pid := pad_right(int_to_string(session.pid), 7)
+			clients := pad_right(int_to_string(session.clients), 7)
+			print_line(pad_right(session.name, 20), pid, clients, collapse_home(session.dir))
 		}
 	}
 	if len(names) == 0 && len(others) == 0 {

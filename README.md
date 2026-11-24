@@ -18,7 +18,7 @@ One small binary, no daemon, no config required.
 
 ## Install
 
-Homebrew (Apple Silicon):
+Homebrew (Apple Silicon and Intel):
 
 ```sh
 brew install en9inerd/tap/gws
@@ -37,20 +37,32 @@ Optional keybinds for `~/.config/ghostty/config` (they type the command, so use 
 shell prompt):
 
 ```ini
-keybind = ctrl+b>f=text:gws\n
-keybind = ctrl+b>v=text:gws split right\n
-keybind = ctrl+b>s=text:gws split down\n
-keybind = ctrl+b>c=text:gws tab\n
-keybind = ctrl+b>x=text:gws kill\n
-keybind = ctrl+b>shift+x=text:gws pick --kill\n
+keybind = ctrl+b>f=text:\x20gws\n
+keybind = ctrl+b>v=text:\x20gws split right\n
+keybind = ctrl+b>s=text:\x20gws split down\n
+keybind = ctrl+b>c=text:\x20gws tab\n
+keybind = ctrl+b>x=text:\x20gws kill\n
+keybind = ctrl+b>shift+x=text:\x20gws pick --kill\n
+```
+
+Shell history: these keybinds, and the ` exec gws attach ...` that `open`, `split` and
+`tab` type into each new pane, start with a space (`\x20`). fish leaves such lines out of
+its history; zsh and bash need an option, e.g. in `~/.zshrc`:
+
+```zsh
+setopt HIST_IGNORE_SPACE  # bash: HISTCONTROL=ignorespace (or ignoreboth)
 ```
 
 Tab titles: gws titles each pane with its session name (`myapp.editor`), and Ghostty's
-tab bar shows the focused pane's title. Ghostty's shell integration replaces that title
-with the directory or running command. To show the session name again at every prompt
-(a running command still shows its own name), add this to `~/.zshrc`:
+tab bar shows the focused pane's title. Programs in a pane (nvim, ssh, coding agents)
+set their own titles, which stay after they exit, and zmx shows a session's last title
+again on every attach. To show the session name again at every prompt (a running
+command still shows its own title), add this to `~/.zshrc`:
 
 ```zsh
+# Inside zmx sessions: keep Ghostty's shell integration from titling the tab, if it
+# is loaded (e.g. with `shell-integration = zsh` when Ghostty starts zmx directly).
+[[ -n "$ZMX_SESSION" ]] && GHOSTTY_SHELL_FEATURES=${(j:,:)${(@)${(@s:,:)GHOSTTY_SHELL_FEATURES}:#title}}
 # Inside zmx sessions: show the session name as the title at every prompt.
 _zmx_title() { [[ -n "$ZMX_SESSION" ]] && printf '\e]0;%s\a' "$ZMX_SESSION"; }
 precmd_functions+=(_zmx_title)  # keep this last in .zshrc
@@ -84,6 +96,7 @@ back. `ctrl+\` detaches only the pane you're in.
 | `gws list` | Show projects and sessions. |
 | `gws kill [name[.pane]]` | Kill a project, pane or session. No argument: the current one. |
 | `gws delete <name>[.<pane>] --yes` | Kill a project's panes and remove its file, or kill one pane and remove it from the file. |
+| `gws help` | Show the commands (also `-h`, `--help`). |
 | `gws version` | Print the version (also `-v`, `--version`). |
 
 When `[name]` is left out, gws uses the project whose `dir` is the current directory, or
@@ -125,7 +138,7 @@ Whole lines starting with `;` or `#` are comments.
 `~/.config/gws/config.ini`:
 
 ```ini
-; directories offered by the picker, optionally with a depth
+; directories offered by the picker, optionally with a depth (default: ~/Development)
 search = ~/Development
 search = ~/Work:2
 ; default search depth and split direction

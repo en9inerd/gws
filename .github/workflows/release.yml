@@ -29,7 +29,7 @@ jobs:
         uses: laytan/setup-odin@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release: latest
+          release: dev-2026-11a
 
       - name: Check
         run: make check
@@ -110,6 +110,9 @@ jobs:
           - os: macos-latest
             filter: darwin_arm64
             artifact: darwin_arm64
+          - os: macos-latest
+            filter: darwin_amd64
+            artifact: darwin_amd64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -120,7 +123,7 @@ jobs:
         uses: laytan/setup-odin@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release: latest
+          release: dev-2026-11a
 
       - name: Build and package
         env:

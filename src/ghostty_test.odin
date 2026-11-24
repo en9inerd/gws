@@ -136,7 +136,7 @@ test_surface_config :: proc(t: ^testing.T) {
 	b := strings.builder_make()
 	write_surface_config(&b, "app.it's", "/w")
 	exe, _ := os.get_executable_path(context.allocator)
-	input := concat("exec ", shell_quote(exe), " attach 'app.it'\\''s'")
+	input := concat(" exec ", shell_quote(exe), " attach 'app.it'\\''s'")
 	testing.expect_value(
 		t,
 		strings.to_string(b),

@@ -8,6 +8,7 @@ TAP_REPO="${3:?tap repo URL required}"
 sha_of() { shasum -a 256 "${DIST}/$1" | awk '{print $1}'; }
 
 SHA_MACOS_ARM64=$(sha_of gws_aarch64-macos.tar.gz)
+SHA_MACOS_AMD64=$(sha_of gws_x86_64-macos.tar.gz)
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -18,6 +19,7 @@ cp packaging/homebrew/gws.rb "$TMPDIR/tap/Formula/gws.rb"
 sed -i.bak \
   -e "s/VERSION_PLACEHOLDER/${VERSION}/g" \
   -e "s/SHA256_MACOS_ARM64/${SHA_MACOS_ARM64}/g" \
+  -e "s/SHA256_MACOS_AMD64/${SHA_MACOS_AMD64}/g" \
   "$TMPDIR/tap/Formula/gws.rb"
 rm -f "$TMPDIR/tap/Formula/gws.rb.bak"
 

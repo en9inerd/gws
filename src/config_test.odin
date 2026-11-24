@@ -456,13 +456,13 @@ test_project_files :: proc(t: ^testing.T) {
 	search := concat(root, "/search")
 	make_test_dir(t, concat(search, "/one"))
 	config.search_paths[0] = {path = search}
-	sessions := []Session{{name = "a.editor", clients = 1, dir = "/a"}, {name = "misc"}}
+	sessions := []Session{{name = "a.editor", pid = 42, clients = 1, dir = "/a"}, {name = "misc"}}
 	lines := picker_lines(config, sessions)
 	cwd, _ := os.get_working_directory(context.allocator)
 	expected := []string {
 		concat("[here] ", cwd),
-		concat("[zmx] a.editor", strings.repeat(" ", 17), "clients:1  /a"),
-		concat("[zmx] misc", strings.repeat(" ", 21), "clients:0  "),
+		concat("[zmx] a.editor", strings.repeat(" ", 17), "pid:42      clients:1  /a"),
+		concat("[zmx] misc", strings.repeat(" ", 21), "pid:0       clients:0  "),
 		"[project] a",
 		"[project] b",
 		"[project] broken",

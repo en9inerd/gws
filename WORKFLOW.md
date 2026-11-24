@@ -73,6 +73,9 @@ start a new session with that name.
 
 Inside a zmx session, picking another session switches to it instead of nesting.
 
+To put a session in another tab or split, open one with `cmd+t` or `cmd+d` and pick
+the session there. A session can be attached in several places at once.
+
 For a quick throwaway session in the current directory:
 
 ```sh

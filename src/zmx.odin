@@ -7,6 +7,7 @@ import "core:strings"
 
 Session :: struct {
 	name:    string,
+	pid:     int,
 	clients: int,
 	dir:     string,
 }
@@ -27,6 +28,8 @@ parse_zmx_list :: proc(output: string) -> []Session {
 			switch key {
 			case "name":
 				session.name = value
+			case "pid":
+				session.pid, _ = strconv.parse_int(value)
 			case "clients":
 				session.clients, _ = strconv.parse_int(value)
 			case "cwd":
@@ -137,26 +140,30 @@ attach_session :: proc(session, dir, cmd: string) -> ! {
 			fail("cannot cd to ", dir, ": ", os.error_string(err))
 		}
 	}
-	if cmd == "" {
-		replace_process({"zmx", "attach", session})
-	}
-	// zmx ignores the command when the session already exists.
-	replace_process({"zmx", "attach", session, shell_path(), "-c", pane_script(cmd)})
+	replace_process(attach_command(session, cmd))
 }
 
 set_terminal_title :: proc(title: string) {
 	os.write_string(os.stdout, concat("\x1b]0;", title, "\a"))
 }
-// `zmx run -d` quotes each argument and types the line into a bash prompt;
-// `exec` replaces bash, so zmx's task marker never runs.
+
+// zmx ignores the command when the session already exists.
+attach_command :: proc(session, cmd: string) -> []string {
+	command: [dynamic]string
+	append(&command, "zmx", "attach", session)
+	if cmd != "" {
+		append(&command, shell_path(), "-c", pane_script(cmd))
+	}
+	return command[:]
+}
+
+// attach_command without a terminal: zmx creates the session and returns at EOF on
+// stdin (run_process gives it /dev/null). Without ZMX_SESSION it creates the session
+// instead of switching this one.
 create_detached_session :: proc(session, dir, cmd: string) {
 	command: [dynamic]string
-	append(&command, "zmx", "run", session, "-d", "exec", shell_path())
-	if cmd == "" {
-		append(&command, "-l")
-	} else {
-		append(&command, "-c", concat("clear\n", pane_script(cmd)))
-	}
+	append(&command, "env", "-u", "ZMX_SESSION")
+	append(&command, ..attach_command(session, cmd))
 	if result := run_process(command[:], dir); !result.ok {
 		fail("cannot create session ", session, ": ", strings.trim_space(result.stderr))
 	}

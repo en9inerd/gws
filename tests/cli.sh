@@ -29,7 +29,10 @@ cat > "$WORK/bin/zmx" << 'EOF'
 echo "zmx $*" >> "$FAKE_LOG"
 if [ "$1" = list ]; then cat "$FAKE_ZMX_LIST" 2> /dev/null; fi
 # Signals ignored by gws carry over into zmx and its shells.
-if [ "$1" = attach ]; then perl -e 'print "sigpipe=", ($SIG{PIPE} || "default"), "\n"' >> "$FAKE_LOG"; fi
+if [ "$1" = attach ]; then
+	perl -e 'print "sigpipe=", ($SIG{PIPE} || "default"), "\n"' >> "$FAKE_LOG"
+	echo "attach env: ZMX_SESSION=${ZMX_SESSION:-} cwd=$(pwd -P)" >> "$FAKE_LOG"
+fi
 exit 0
 EOF
 
@@ -219,7 +222,8 @@ gws list
 expect_code 0 "list"
 expect_out "PROJECT              PANES   DIR" "list header"
 expect_out "app                  1/3     ~/Development/app" "list counts live panes"
-expect_out "misc                 0       /tmp" "list other sessions"
+expect_out "SESSION              PID     CLIENTS DIR" "list sessions header"
+expect_out "misc                 1       0       /tmp" "list other sessions"
 expect_no_out "app.editor" "list hides project sessions"
 expect_no_out "dead" "list hides dead sessions"
 
@@ -267,13 +271,15 @@ expect_out "not a directory: ./missing" "attach missing dir"
 
 # Inside a session, missing panes are created detached first, then attached.
 ZMX_SESSION=misc gws attach app.server
-expect_file "$FAKE_LOG" "zmx run app.server -d exec /bin/sh -c clear" "attach inside zmx creates the pane"
-expect_file "$FAKE_LOG" "zmx attach app.server" "attach inside zmx switches"
+expect_file "$FAKE_LOG" "zmx attach app.server /bin/sh -c trap" "attach inside zmx creates the pane"
+expect_file "$FAKE_LOG" "attach env: ZMX_SESSION= cwd=$APP/api" "attach inside zmx creates the pane in its dir"
+expect_file "$FAKE_LOG" "attach env: ZMX_SESSION=misc" "attach inside zmx switches"
 ZMX_SESSION=misc gws attach app.shell
-expect_file "$FAKE_LOG" "zmx run app.shell -d exec /bin/sh -l" "attach inside zmx creates a bare pane"
+expect_file "$FAKE_LOG" "attach env: ZMX_SESSION= cwd=$APP" "attach inside zmx creates a bare pane"
+expect_no_file_text "$FAKE_LOG" "zmx attach app.shell /bin/sh" "attach inside zmx starts a bare pane with the default shell"
 sessions "$(session_line misc 0 /tmp)" "$(session_line app.shell 0 "$APP")"
 ZMX_SESSION=misc gws attach app.shell
-expect_no_file_text "$FAKE_LOG" "zmx run" "attach inside zmx reuses a live pane"
+expect_no_file_text "$FAKE_LOG" "attach env: ZMX_SESSION= " "attach inside zmx reuses a live pane"
 
 # --- open ---------------------------------------------------------------------------
 
@@ -450,7 +456,7 @@ ZMX_SESSION=misc FAKE_FZF_EXIT=130 gws pick
 expect_no_file_text "$FAKE_FZF_INPUT" "[zmx] misc" "picker hides the current session"
 expect_file "$FAKE_FZF_INPUT" "[zmx] app.editor" "picker keeps the other sessions"
 
-FAKE_FZF_OUTPUT='\n[zmx] misc                     clients:0  /tmp' gws pick
+FAKE_FZF_OUTPUT='\n[zmx] misc                     pid:1       clients:0  /tmp' gws pick
 expect_file "$FAKE_LOG" "zmx attach misc" "pick a session"
 expect_file "$FAKE_LOG" "sigpipe=default" "pick leaves SIGPIPE at its default for zmx"
 FAKE_FZF_OUTPUT='\n[pane] app.shell' gws pick

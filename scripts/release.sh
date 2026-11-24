@@ -11,6 +11,7 @@ mkdir -p "$DIST_DIR" odin-out
 # through AppleScript.
 targets=(
   "darwin_arm64:aarch64-macos"
+  "darwin_amd64:x86_64-macos"
 )
 
 for entry in "${targets[@]}"; do

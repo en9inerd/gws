@@ -58,8 +58,9 @@ picker_lines :: proc(config: Config, sessions: []Session) -> []string {
 		if session.name == current_session {
 			continue
 		}
+		pid := pad_right(int_to_string(session.pid), 7)
 		clients := pad_right(int_to_string(session.clients), 2)
-		append(&lines, concat(SESSION_PREFIX, pad_right(session.name, 24), "clients:", clients, collapse_home(session.dir)))
+		append(&lines, concat(SESSION_PREFIX, pad_right(session.name, 24), "pid:", pid, "clients:", clients, collapse_home(session.dir)))
 	}
 	names := project_names()
 	for name in names {

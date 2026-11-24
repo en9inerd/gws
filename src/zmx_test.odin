@@ -22,8 +22,8 @@ test_parse_zmx_list :: proc(t: ^testing.T) {
 	sessions := parse_zmx_list(output)
 
 	testing.expect_value(t, len(sessions), 3)
-	testing.expect_value(t, sessions[0], Session{name = "dev", clients = 2, dir = "/Users/me/a b"})
-	testing.expect_value(t, sessions[1], Session{name = "cur.1", clients = 1, dir = "/tmp"})
+	testing.expect_value(t, sessions[0], Session{name = "dev", pid = 1, clients = 2, dir = "/Users/me/a b"})
+	testing.expect_value(t, sessions[1], Session{name = "cur.1", pid = 2, clients = 1, dir = "/tmp"})
 	testing.expect_value(t, sessions[2], Session{name = "bare"})
 
 	testing.expect_value(t, len(parse_zmx_list("")), 0)

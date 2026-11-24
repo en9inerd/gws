@@ -41,7 +41,8 @@ current_ghostty_tty :: proc() -> string {
 		applescript_string(tty),
 		")",
 	)
-	if result := run_process({"osascript", "-e", query}); strings.trim_space(result.stdout) != "true" {
+	if result := run_process({"osascript", "-e", query});
+	   strings.trim_space(result.stdout) != "true" {
 		return ""
 	}
 	return strings.clone(tty)
@@ -64,7 +65,14 @@ open_layout_script :: proc(project: Project, here_tty: string) -> string {
 			first_in_tab := len(opened) == 0
 
 			if tab_index == 0 && first_in_tab && here_tty != "" {
-				write_strings(&b, "\tset ", terminal, " to first terminal whose tty is ", applescript_string(here_tty), "\n")
+				write_strings(
+					&b,
+					"\tset ",
+					terminal,
+					" to first terminal whose tty is ",
+					applescript_string(here_tty),
+					"\n",
+				)
 				append(&opened, i)
 				continue
 			}
@@ -73,14 +81,31 @@ open_layout_script :: proc(project: Project, here_tty: string) -> string {
 			switch {
 			case !first_in_tab:
 				target := pane_variable(split_target(project, opened[:], pane.from))
-				write_strings(&b, "\tset ", terminal, " to split ", target, " direction ", pane.split, " with configuration cfg\n")
+				write_strings(
+					&b,
+					"\tset ",
+					terminal,
+					" to split ",
+					target,
+					" direction ",
+					pane.split,
+					" with configuration cfg\n",
+				)
 			case tab_index == 0:
 				write_strings(
 					&b,
 					"\tif (count of windows) is 0 then\n",
-					"\t\tset ", terminal, " to ", NEW_WINDOW, "\n",
+					"\t\tset ",
+					terminal,
+					" to ",
+					NEW_WINDOW,
+					"\n",
 					"\telse\n",
-					"\t\tset ", terminal, " to ", NEW_TAB, "\n",
+					"\t\tset ",
+					terminal,
+					" to ",
+					NEW_TAB,
+					"\n",
 					"\tend if\n",
 				)
 			case:
@@ -90,7 +115,12 @@ open_layout_script :: proc(project: Project, here_tty: string) -> string {
 		}
 
 		if len(opened) > 1 {
-			write_strings(&b, "\tperform action \"equalize_splits\" on ", pane_variable(opened[0]), "\n")
+			write_strings(
+				&b,
+				"\tperform action \"equalize_splits\" on ",
+				pane_variable(opened[0]),
+				"\n",
+			)
 		}
 	}
 
@@ -109,19 +139,21 @@ add_pane_script :: proc(session: string, pane: Pane) -> string {
 		write_strings(
 			&b,
 			"\tset p to focused terminal of selected tab of front window\n",
-			"\tsplit p direction ", pane.split, " with configuration cfg\n",
+			"\tsplit p direction ",
+			pane.split,
+			" with configuration cfg\n",
 		)
 	}
 	strings.write_string(&b, "end tell\n")
 	return strings.to_string(b)
 }
 
-// Sets `cfg` to start in dir and attach the session. The attach is typed into the pane's
-// own shell for the user's PATH; Ghostty's `command` skips the profile and leaves the
-// pane open after exit.
+// Sets `cfg` to start in dir and attach the session, typed into the pane's shell for the
+// user's PATH: Ghostty's `command` skips the profile and keeps the pane open after exit
+// (ghostty#13167). The leading space keeps it out of history with HIST_IGNORE_SPACE.
 write_surface_config :: proc(b: ^strings.Builder, session, dir: string) {
 	gws_path, _ := os.get_executable_path(context.allocator)
-	input := concat("exec ", shell_quote(gws_path), " attach ", shell_quote(session))
+	input := concat(" exec ", shell_quote(gws_path), " attach ", shell_quote(session))
 	write_strings(
 		b,
 		"\tset cfg to new surface configuration\n",
