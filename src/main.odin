@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:os"
 import "core:slice"
 import "core:strings"
+import "core:sys/posix"
 
 // Set by `make` and the release build from the git tag: -define:GWS_VERSION=1.2.3
 GWS_VERSION :: #config(GWS_VERSION, "dev")
@@ -181,8 +182,9 @@ cmd_open :: proc(args: Args) {
 }
 
 // Builds the project's Ghostty layout. From a plain Ghostty terminal the first tab is
-// built there and this process attaches its first pane. Panes attached elsewhere stay
-// where they are; only the others open, unless force opens them all.
+// built there, with its first pane in that terminal. Panes attached elsewhere stay
+// where they are; only the others open, unless force opens them all. A pane whose tab
+// is still open in Ghostty goes back into that tab, next to the panes there.
 open_project :: proc(name: string, force: bool) {
 	require_macos("open")
 	project := load_project(name, load_config())
@@ -191,38 +193,66 @@ open_project :: proc(name: string, force: bool) {
 	}
 
 	sessions := live_sessions()
-	unattached: [dynamic]Pane
+	attached: map[string]bool
 	for pane in project.panes {
 		if !os.is_dir(pane.dir) {
 			fail(project.name, ".", pane.name, ": not a directory: ", pane.dir)
 		}
 		session, live := find_session(sessions, session_name(project.name, pane.name))
-		if force || !live || session.clients == 0 {
-			append(&unattached, pane)
+		if !force && live && session.clients > 0 {
+			attached[pane.name] = true
 		}
 	}
-	if len(unattached) == 0 {
+	pane_count := len(project.panes)
+	if len(attached) == pane_count {
 		fail(project.name, " is already open; use --force to open another view")
 	}
-	pane_count := len(project.panes)
-	project.panes = unattached
+	open_terminals: map[string]int
+	if len(attached) > 0 {
+		open_terminals = pane_terminals(project, sessions)
+	}
+	layout: [dynamic]Pane
+	for pane in project.panes {
+		if !attached[pane.name] || pane.name in open_terminals {
+			append(&layout, pane)
+		}
+	}
+	project.panes = layout
 
 	here_tty := current_ghostty_tty()
-	if err := run_applescript(open_layout_script(project, here_tty)); err != "" {
+	script := open_layout_script(project, here_tty, open_terminals)
+	if err := run_applescript(script); err != "" {
 		fail(err)
 	}
-	if len(unattached) == pane_count {
+	if len(attached) == 0 {
 		print_line("opened ", project.name)
 	} else {
 		print_line(
-			"opened ", project.name, " (", int_to_string(len(unattached)), " of ",
+			"opened ", project.name, " (", int_to_string(pane_count - len(attached)), " of ",
 			int_to_string(pane_count), " panes; the rest are open elsewhere)",
 		)
 	}
-	if here_tty != "" {
-		first := project.panes[0]
-		attach_session(session_name(project.name, first.name), first.dir, first.cmd)
+}
+
+// Pane name -> pid of the Ghostty terminal showing it: the process group of the pane's
+// `zmx attach` client, the terminal's foreground group. A client that switched sessions
+// still names its first one, so only sessions with a client count.
+pane_terminals :: proc(project: Project, sessions: []Session) -> map[string]int {
+	terminals := make(map[string]int)
+	pids, _ := os.process_list(context.allocator)
+	for pid in pids {
+		info, err := os.process_info_by_pid(pid, {.Command_Args}, context.allocator)
+		if err != nil {
+			continue
+		}
+		session, live := find_session(sessions, attach_command_session(info.command_args))
+		project_name, pane_name, _ := split_session_name(session.name)
+		if live && session.clients > 0 && project_name == project.name && pane_name not_in terminals &&
+		   in_ghostty_terminal(pid) {
+			terminals[pane_name] = int(posix.getpgid(posix.pid_t(pid)))
+		}
 	}
+	return terminals
 }
 
 // A name needs an explicit direction first, so a mistyped direction is not taken as a name.

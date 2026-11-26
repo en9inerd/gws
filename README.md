@@ -46,8 +46,8 @@ keybind = ctrl+b>shift+x=text:\x20gws pick --kill\n
 ```
 
 Shell history: these keybinds, and the ` exec gws attach ...` that `open`, `split` and
-`tab` type into each new pane, start with a space (`\x20`). fish leaves such lines out of
-its history; zsh and bash need an option, e.g. in `~/.zshrc`:
+`tab` type into each pane they open, start with a space (`\x20`). fish leaves such lines
+out of its history; zsh and bash need an option, e.g. in `~/.zshrc`:
 
 ```zsh
 setopt HIST_IGNORE_SPACE  # bash: HISTCONTROL=ignorespace (or ignoreboth)
@@ -78,17 +78,20 @@ gws open myapp         # this terminal becomes the first pane, the rest open aro
 ```
 
 Close the window when you're done; everything keeps running. `gws open myapp` brings it
-back. `ctrl+\` detaches only the pane you're in.
+back. `ctrl+\` detaches only the pane you're in and closes it; its session keeps running.
+
+Panes gws opens close when you leave their session; `gws attach` and picks attach in
+the terminal you're in and give you back your shell.
 
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `gws` | Pick a session, project, project pane or directory with fzf. A project opens its layout. |
+| `gws` | Pick a session, project, project pane or directory with fzf. A project opens its layout; anything else attaches in this terminal. |
 | `gws pick --kill` | Pick a session to kill. |
 | `gws new <name> [dir]` | Create a project. `dir` defaults to the current directory. |
 | `gws edit [name]` | Edit a project file in `$EDITOR`. |
-| `gws open [name] [--force]` | Open the project layout. From a plain Ghostty terminal the first tab is built right there; otherwise in new tabs. Panes already open in another window stay there and only the rest open; `--force` opens every pane again. |
+| `gws open [name] [--force]` | Open the project layout. From a plain Ghostty terminal the first tab is built right there; otherwise in new tabs. Panes already open in another window stay there and only the rest open, next to their neighbours when their tab is still open; `--force` opens every pane again. |
 | `gws attach <name>[.<pane>]` | Attach in this terminal. Starts the pane if needed. |
 | `gws attach <dir>` | Attach to a session named after the directory (`.`, `./x`, `~/x`, `/x`). |
 | `gws split [right\|left\|down\|up [name]]` | From a project pane: split it and add the new pane to the project, named `name` or numbered. |
@@ -125,7 +128,7 @@ pane and becomes a zmx session named `myapp.editor`, `myapp.shell`, ...
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `cmd` | plain shell | Runs when the pane starts. You get a shell back when it exits or on `ctrl+c`. |
+| `cmd` | plain shell | Runs with your `$SHELL` when the pane starts. You get a shell back when it exits or on `ctrl+c`. |
 | `tab` | `main` | Panes with the same tab share a Ghostty tab. |
 | `split` | global `split`, else `right` | Where the pane goes relative to the one it splits: `right`, `left`, `down`, `up`. |
 | `from` | previous pane in the tab | The pane it splits, an earlier pane in the same tab. `gws split` sets it. |

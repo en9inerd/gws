@@ -2,6 +2,7 @@ package gws
 
 import "core:net"
 import "core:os"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 
@@ -15,7 +16,8 @@ Session :: struct {
 // Listing.
 
 // One session per line: tab-separated key=value fields; the current one is prefixed "→ ".
-// Sessions that errored or ended are left out.
+// Unreachable sessions (err=) are left out. `ended` is a finished `zmx run` task and
+// `status` may be a label: both describe live sessions.
 parse_zmx_list :: proc(output: string) -> []Session {
 	sessions: [dynamic]Session
 	rest := output
@@ -34,7 +36,7 @@ parse_zmx_list :: proc(output: string) -> []Session {
 				session.clients, _ = strconv.parse_int(value)
 			case "cwd":
 				session.dir = cwd_url_to_path(value)
-			case "err", "status", "ended":
+			case "err":
 				dead = true
 			}
 		}
@@ -77,6 +79,14 @@ find_session :: proc(sessions: []Session, name: string) -> (Session, bool) {
 is_session_live :: proc(sessions: []Session, name: string) -> bool {
 	_, found := find_session(sessions, name)
 	return found
+}
+
+// The session of a `zmx attach <session> ...` command line, else "".
+attach_command_session :: proc(args: []string) -> string {
+	if len(args) < 3 || os.base(args[0]) != "zmx" || args[1] != "attach" && args[1] != "a" {
+		return ""
+	}
+	return "" if strings.has_prefix(args[2], "-") else args[2]
 }
 
 // Live sessions of the project, named "<project>.<pane>".
@@ -152,7 +162,7 @@ attach_command :: proc(session, cmd: string) -> []string {
 	command: [dynamic]string
 	append(&command, "zmx", "attach", session)
 	if cmd != "" {
-		append(&command, shell_path(), "-c", pane_script(cmd))
+		append(&command, "/bin/sh", "-c", PANE_SCRIPT, shell_path(), cmd)
 	}
 	return command[:]
 }
@@ -161,24 +171,40 @@ attach_command :: proc(session, cmd: string) -> []string {
 // stdin (run_process gives it /dev/null). Without ZMX_SESSION it creates the session
 // instead of switching this one.
 create_detached_session :: proc(session, dir, cmd: string) {
-	command: [dynamic]string
-	append(&command, "env", "-u", "ZMX_SESSION")
-	append(&command, ..attach_command(session, cmd))
-	if result := run_process(command[:], dir); !result.ok {
+	env, _ := os.environ(context.allocator)
+	env = slice.filter(env, proc(entry: string) -> bool {
+		return !strings.has_prefix(entry, "ZMX_SESSION=")
+	})
+	if result := run_process(attach_command(session, cmd), dir, env); !result.ok {
 		fail("cannot create session ", session, ": ", strings.trim_space(result.stderr))
 	}
 }
 
-// Shell script that runs cmd, then drops back to an interactive shell when cmd exits or
-// on ctrl+c, so the session stays alive.
-pane_script :: proc(cmd: string) -> string {
-	shell := shell_path()
-	// Newlines, not ';': cmd may end with '&' or a '#' comment.
-	return concat("trap \"exec ", shell_quote(shell), "\" INT\n", cmd, "\nexec ", shell)
-}
+// Run by /bin/sh with the user's shell as $0 and the pane's cmd as $1: the shell runs cmd,
+// then the session drops back to an interactive shell when cmd exits or on ctrl+c, so it
+// stays alive. sh holds the trap: not every shell has one.
+PANE_SCRIPT :: `trap 'exec "$0"' INT; "$0" -c "$1"; exec "$0"`
 
+// Killing the current session hangs up this process and zmx with it, and zmx kills in
+// its own order, so the current one is killed last, on its own.
 kill_sessions :: proc(names: []string) {
 	print_line("killing ", strings.join(names, " "))
+	current := get_env("ZMX_SESSION")
+	others: [dynamic]string
+	for name in names {
+		if name != current {
+			append(&others, name)
+		}
+	}
+	if len(others) > 0 {
+		zmx_kill(others[:])
+	}
+	if len(others) < len(names) {
+		zmx_kill({current})
+	}
+}
+
+zmx_kill :: proc(names: []string) {
 	command: [dynamic]string
 	append(&command, "zmx", "kill")
 	append(&command, ..names)

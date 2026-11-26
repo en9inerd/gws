@@ -17,6 +17,7 @@ test_open_layout_script :: proc(t: ^testing.T) {
 	testing.expect_value(t, err, "")
 
 	script := open_layout_script(p, "")
+	testing.expect(t, !strings.contains(script, "input text"))
 	testing.expect(t, strings.has_prefix(script, "tell application \"Ghostty\"\n"))
 	testing.expect(t, strings.has_suffix(script, "\tfocus pane0\nend tell\n"))
 	testing.expect_value(t, strings.count(script, "new tab in front window"), 2)
@@ -42,11 +43,12 @@ test_open_layout_script :: proc(t: ^testing.T) {
 		t,
 		strings.contains(here, `set pane0 to first terminal whose tty is "/dev/ttys009"`),
 	)
+	testing.expect(t, strings.has_suffix(here, concat("\tfocus pane0\n\tinput text ", attach_input("app.editor"), " to pane0\nend tell\n")))
 	testing.expect_value(t, strings.count(here, "new tab in front window"), 1)
 	testing.expect_value(t, strings.count(here, "new window"), 0)
 	testing.expect_value(t, strings.count(here, "set initial input of cfg to"), 2)
 	testing.expect(t, strings.contains(here, "set pane2 to split pane0 direction down"))
-	testing.expect(t, !strings.contains(here, "app.editor"))
+	testing.expect_value(t, strings.count(here, "app.editor"), 1)
 }
 
 @(test)
@@ -66,7 +68,10 @@ test_open_layout_script_single_pane :: proc(t: ^testing.T) {
 	testing.expect_value(
 		t,
 		here,
-		"tell application \"Ghostty\"\n\tset pane0 to first terminal whose tty is \"/dev/ttys001\"\n\tfocus pane0\nend tell\n",
+		concat(
+			"tell application \"Ghostty\"\n\tset pane0 to first terminal whose tty is \"/dev/ttys001\"\n\tfocus pane0\n",
+			"\tinput text ", attach_input("app.shell"), " to pane0\nend tell\n",
+		),
 	)
 }
 
@@ -90,6 +95,81 @@ test_open_layout_script_from :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_open_layout_script_reopen :: proc(t: ^testing.T) {
+	arena: runtime.Arena
+	context.allocator = test_arena(&arena)
+	defer runtime.arena_destroy(&arena)
+
+	text := "dir = /w\n[editor]\n[agent]\n[server]\ntab = run\n"
+	p, err := parse_project("app", text, "right")
+	testing.expect_value(t, err, "")
+
+	terminals :: proc(first: string, first_pid: int, second: string, second_pid: int) -> map[string]int {
+		m := make(map[string]int)
+		m[first] = first_pid
+		m[second] = second_pid
+		return m
+	}
+
+	// The first pane of a tab goes back next to the pane that split it.
+	script := open_layout_script(p, "/dev/ttys009", terminals("agent", 41, "server", 42))
+	testing.expect(t, strings.contains(script, "\tset pane1 to first terminal whose pid is 41\n"))
+	testing.expect(t, strings.contains(script, "set pane0 to split pane1 direction left with configuration cfg"))
+	testing.expect(t, strings.contains(script, ` attach 'app.editor'" & linefeed`))
+	testing.expect(t, strings.contains(script, "perform action \"equalize_splits\" on pane1\n"))
+	testing.expect(t, strings.has_suffix(script, "\tfocus pane0\nend tell\n"))
+	testing.expect(t, !strings.contains(script, "new tab"))
+	testing.expect(t, !strings.contains(script, "pid is 42"))
+	testing.expect(t, !strings.contains(script, "ttys009"))
+	testing.expect_value(t, strings.count(script, "set initial input of cfg to"), 1)
+
+	// A later pane splits the closest open pane before it.
+	script = open_layout_script(p, "", terminals("editor", 40, "server", 42))
+	testing.expect(t, strings.contains(script, "set pane1 to split pane0 direction right"))
+
+	// A tab with nothing open opens as a new tab; the window exists, so no window check.
+	open_terminals := terminals("editor", 40, "agent", 41)
+	script = open_layout_script(p, "", open_terminals)
+	testing.expect(t, strings.contains(script, "\tset pane2 to "+NEW_TAB+"\n"))
+	testing.expect(t, !strings.contains(script, "count of windows"))
+	testing.expect(t, !strings.contains(script, "pid is"))
+	testing.expect(t, strings.has_suffix(script, "\tfocus pane2\nend tell\n"))
+
+	script = open_layout_script(p, "/dev/ttys009", open_terminals)
+	testing.expect(t, strings.contains(script, "\tset pane2 to first terminal whose tty is \"/dev/ttys009\"\n"))
+	testing.expect(t, strings.contains(script, concat("\tinput text ", attach_input("app.server"), " to pane2\n")))
+	testing.expect(t, !strings.contains(script, "new tab"))
+}
+
+@(test)
+test_split_target :: proc(t: ^testing.T) {
+	arena: runtime.Arena
+	context.allocator = test_arena(&arena)
+	defer runtime.arena_destroy(&arena)
+
+	p, _ := parse_project("app", "dir = /w\n[a]\n[b]\nsplit = down\n[c]\nfrom = a\n[d]\n", "right")
+	expect_target :: proc(t: ^testing.T, p: Project, opened: []int, i, target: int, direction: string) {
+		got_target, got_direction := split_target(p, opened, i)
+		testing.expectf(
+			t,
+			got_target == target && got_direction == direction,
+			"pane %d: got %d %s, want %d %s",
+			i, got_target, got_direction, target, direction,
+		)
+	}
+	expect_target(t, p, {0}, 1, 0, "down")
+	expect_target(t, p, {0, 1}, 2, 0, "right") // from = a
+	expect_target(t, p, {0, 1, 2}, 3, 2, "right") // closest before
+	expect_target(t, p, {0, 2, 3}, 1, 0, "down") // reopened in the middle
+	expect_target(t, p, {3, 1, 2}, 0, 1, "up") // reopened first pane: far side of b
+
+	testing.expect_value(t, opposite_split("right"), "left")
+	testing.expect_value(t, opposite_split("left"), "right")
+	testing.expect_value(t, opposite_split("down"), "up")
+	testing.expect_value(t, opposite_split("up"), "down")
+}
+
+@(test)
 test_layout_helpers :: proc(t: ^testing.T) {
 	arena: runtime.Arena
 	context.allocator = test_arena(&arena)
@@ -98,12 +178,6 @@ test_layout_helpers :: proc(t: ^testing.T) {
 	p, _ := parse_project("app", "dir = /w\n[a]\ntab = x\n[b]\n[c]\ntab = x\n[d]\ntab = y\n", "right")
 	names := tab_names(p)
 	testing.expectf(t, slice.equal(names, []string{"x", "main", "y"}), "got %v", names)
-
-	opened := []int{0, 2}
-	testing.expect_value(t, split_target(p, opened, "a"), 0)
-	testing.expect_value(t, split_target(p, opened, "c"), 2)
-	testing.expect_value(t, split_target(p, opened, "b"), 2)
-	testing.expect_value(t, split_target(p, opened, ""), 2)
 
 	testing.expect_value(t, pane_variable(0), "pane0")
 	testing.expect_value(t, pane_variable(12), "pane12")

@@ -49,9 +49,10 @@ Process_Result :: struct {
 	stderr:  string,
 }
 
-run_process :: proc(command: []string, dir := "") -> Process_Result {
+// env nil: this process's environment.
+run_process :: proc(command: []string, dir := "", env: []string = nil) -> Process_Result {
 	state, stdout, stderr, err := os.process_exec(
-		{command = command, working_dir = dir},
+		{command = command, working_dir = dir, env = env},
 		context.allocator,
 	)
 	if err != nil {

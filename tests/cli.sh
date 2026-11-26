@@ -18,7 +18,7 @@ export FAKE_LOG="$WORK/calls"            # one line per zmx call
 export FAKE_SCRIPTS="$WORK/scripts"      # every AppleScript passed to osascript
 export FAKE_ZMX_LIST="$WORK/zmx-list"    # what `zmx list` prints
 export FAKE_FZF_INPUT="$WORK/fzf-input"  # what gws sent to fzf
-unset ZMX_SESSION TERM_PROGRAM EDITOR FAKE_OSASCRIPT_FAIL FAKE_FZF_OUTPUT FAKE_FZF_EXIT
+unset ZMX_SESSION EDITOR FAKE_OSASCRIPT_FAIL FAKE_FZF_OUTPUT FAKE_FZF_EXIT
 
 PROJECTS="$XDG_CONFIG_HOME/gws/projects"
 APP="$HOME/Development/app"
@@ -68,7 +68,7 @@ gws() {
 		FAKE_OSASCRIPT_FAIL="${FAKE_OSASCRIPT_FAIL:-}" \
 		FAKE_FZF_OUTPUT="${FAKE_FZF_OUTPUT:-}" \
 		FAKE_FZF_EXIT="${FAKE_FZF_EXIT:-0}" \
-		"$GWS" "$@" 2>&1)
+		"$GWS" "$@" 2>&1 < /dev/null)
 	code=$?
 	unset ZMX_SESSION EDITOR FAKE_OSASCRIPT_FAIL FAKE_FZF_OUTPUT FAKE_FZF_EXIT
 }
@@ -239,8 +239,8 @@ sessions "$(session_line misc 0 /tmp)"
 gws attach app.server
 expect_code 0 "attach pane"
 expect_out "$(printf '\033]0;app.server\007')" "attach sets the terminal title"
-expect_file "$FAKE_LOG" "zmx attach app.server /bin/sh -c trap \"exec '/bin/sh'\" INT" "attach runs the pane cmd"
-expect_file "$FAKE_LOG" "npm start" "attach runs the pane cmd"
+expect_file "$FAKE_LOG" "zmx attach app.server /bin/sh -c trap 'exec \"\$0\"' INT" "attach runs the pane cmd"
+expect_file "$FAKE_LOG" "; exec \"\$0\" /bin/sh npm start" "attach runs the pane cmd with the user's shell"
 
 gws attach app
 expect_file "$FAKE_LOG" "zmx attach app.editor /bin/sh -c" "attach project uses its first pane"
@@ -431,6 +431,9 @@ expect_file "$FAKE_LOG" "zmx kill misc" "kill current session"
 gws kill app
 expect_out "killing app.editor app.shell" "kill project"
 expect_file "$FAKE_LOG" "zmx kill app.editor app.shell" "kill project"
+ZMX_SESSION=app.editor gws kill app
+kills=$(grep '^zmx kill' "$FAKE_LOG" | tr '\n' '|')
+if [ "$kills" = "zmx kill app.shell|zmx kill app.editor|" ]; then ok; else bad "kill project from its pane kills that pane last: $kills"; fi
 gws kill app.shell
 expect_file "$FAKE_LOG" "zmx kill app.shell" "kill pane"
 gws kill misc

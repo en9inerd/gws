@@ -168,10 +168,7 @@ parse_ini :: proc(text: string) -> (entries: [dynamic]Ini_Entry, err: string) {
 				value = unquoted
 			}
 		}
-		append(
-			&entries,
-			Ini_Entry{line = line_number, key = strings.trim_space(key), value = value},
-		)
+		append(&entries, Ini_Entry{line = line_number, key = strings.trim_space(key), value = value})
 	}
 	return entries, ""
 }
@@ -187,12 +184,7 @@ parse_project :: proc(name, text, default_split: string) -> (project: Project, e
 	for entry in entries {
 		if entry.is_section {
 			if !is_valid_name(entry.key) {
-				return project, line_error(
-					entry.line,
-					"invalid pane name ",
-					quoted(entry.key),
-					NAME_RULE,
-				)
+				return project, line_error(entry.line, "invalid pane name ", quoted(entry.key), NAME_RULE)
 			}
 			if _, duplicate := find_pane(project, entry.key); duplicate {
 				return project, line_error(entry.line, "duplicate pane ", quoted(entry.key))
@@ -327,13 +319,7 @@ try_load_project :: proc(name: string, config: Config) -> (project: Project, err
 	path := project_path(name)
 	data, read_err := os.read_entire_file(path, context.allocator)
 	if read_err != nil {
-		return project, concat(
-			"project ",
-			quoted(name),
-			" not found (create it: gws new ",
-			name,
-			")",
-		)
+		return project, concat("project ", quoted(name), " not found (create it: gws new ", name, ")")
 	}
 	project, err = parse_project(name, string(data), config.default_split)
 	if err != "" {
@@ -455,7 +441,6 @@ remove_section :: proc(text, name: string) -> string {
 	return strings.to_string(b)
 }
 
-// The name in a `[name]` line.
 section_header :: proc(line: string) -> (name: string, ok: bool) {
 	trimmed := strings.trim_space(line)
 	if !strings.has_prefix(trimmed, "[") {
